@@ -1,7 +1,7 @@
 use strict;
 use warnings;
 
-use Test::More tests => 13;
+use Test::More tests => 22;
 use Data::Dumper;
 use feature qw/say/;
 
@@ -110,6 +110,78 @@ is($got,':cc9039e0510bfb4c513ff8c0f8360cab:::eb57b075a7e17391136eff38c63547e4',"
 ################################################################################
 $got= BSSched::BuildJob::jobname("openSUSE:Factory/standard" . ( "x" x 200 ),"kernel");
 is($got,':7f34cc064ad26bb6433937dee6e058b6::kernel',"Checking jobname oversized prp");
+################################################################################
+# Testing Global Build ID Tracking & Migration on Read
+################################################################################
+use File::Path qw(remove_tree);
+
+# Setup mock directories
+my $test_bsdir = $dirname . "/tmp/0100_global_bcnt";
+$BSConfig::bsdir = $test_bsdir;
+remove_tree($test_bsdir) if -d $test_bsdir;
+
+my $test_projid = "P1";
+my $test_packid = "A1";
+my $versrel = "1.0-1";
+
+my $ctx = {
+  'project' => $test_projid,
+  'gdst' => "$test_bsdir/build/$test_projid/standard/x86_64",
+};
+my $dst = "$ctx->{'gdst'}/$test_packid";
+my $pdata = {
+  'versrel' => $versrel,
+};
+
+# 1. Test nextbcnt with empty history (should return 1)
+my $bcnt = BSSched::BuildJob::nextbcnt($ctx, $test_packid, $pdata);
+is($bcnt, 1, "nextbcnt returns 1 with no history");
+
+# 2. Test addsucceededhist writes to both local and global history
+my $info = {
+  'project' => $test_projid,
+  'package' => $test_packid,
+  'versrel' => $versrel,
+  'bcnt' => 1,
+  'srcmd5' => '12345',
+  'rev' => '1',
+  'reason' => 'test build',
+};
+my $now = time();
+BSUtil::mkdir_p($dst);
+BSSched::BuildJob::addsucceededhist($dst, $info, $now, 42);
+
+# Verify local history exists
+ok(-f "$dst/history", "addsucceededhist writes local history");
+
+# Verify global history exists
+my $global_history_dir = "$test_bsdir/db/buildcounter/$test_projid/$test_packid";
+ok(-f "$global_history_dir/history", "addsucceededhist writes global history");
+
+# 3. Test nextbcnt reads from global history and increments (should return 2)
+$bcnt = BSSched::BuildJob::nextbcnt($ctx, $test_packid, $pdata);
+is($bcnt, 2, "nextbcnt reads from global and increments build counter");
+
+# 4. Test Migrate-on-Read:
+# Clear global history, keep local history
+remove_tree($global_history_dir);
+ok(!-d $global_history_dir, "Removed global history for migrate-on-read test");
+
+# Call nextbcnt (should trigger migration from local to global, and return 2)
+$bcnt = BSSched::BuildJob::nextbcnt($ctx, $test_packid, $pdata);
+is($bcnt, 2, "nextbcnt migrates local history to global on read and returns 2");
+ok(-f "$global_history_dir/history", "Migration successfully created global history");
+
+# 5. Test persistence across project/repository deletion:
+# Succeeded build is already recorded. Now simulate a complete repository/project wipe:
+remove_tree($ctx->{'gdst'});
+ok(!-d $ctx->{'gdst'}, "Entire repository/project directory was completely deleted");
+
+# Call nextbcnt (should still find history in the global store and return 2)
+$bcnt = BSSched::BuildJob::nextbcnt($ctx, $test_packid, $pdata);
+is($bcnt, 2, "nextbcnt persists and returns 2 even after the project repository directory is deleted");
+
+remove_tree($test_bsdir) if -d $test_bsdir;
 ################################################################################
 
 exit 0;

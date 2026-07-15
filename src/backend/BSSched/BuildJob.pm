@@ -682,7 +682,7 @@ sub jobfinished {
   # write history file
   my $duration = 0;
   $duration = $js->{'endtime'} - $js->{'starttime'} if $js->{'endtime'} && $js->{'starttime'};
-  addsucceededhist($dst, $info, $now, $duration);
+  addsucceededhist($dst, $info, $now, $duration, $projid, $packid, $pdata->{'bcntsynctag'});
 
   # update relsync file (use relsync.merge if relsync is too big)
   if (((-s "$gdst/:relsync") || 0) < 8192 && ! -e "$gdst/:relsync.merge") {
@@ -815,7 +815,7 @@ sub fakejobfinished_nouseforbuild {
     BSSched::BuildResult::update_bininfo_merge($gdst, $packid, $bininfo);
     delete $bininfo->{'.bininfo'};
     # write history file
-    addsucceededhist($dst, $info, $now, 0);
+    addsucceededhist($dst, $info, $now, 0, $projid, $packid, $pdata->{'bcntsynctag'});
   }
   BSUtil::cleandir($jobdatadir);
   rmdir($jobdatadir);
@@ -897,9 +897,26 @@ sub addjobhist {
 =cut
 
 sub addsucceededhist {
-  my ($dst, $info, $now, $duration) = @_;
+  my ($dst, $info, $now, $duration, $projid, $packid, $bcntsynctag) = @_;
+
+  # Fallback for legacy calls
+  $projid ||= $info->{'project'} if ref($info) eq 'HASH';
+  $packid ||= $info->{'package'} if ref($info) eq 'HASH';
+  $bcntsynctag ||= $info->{'bcntsynctag'} if ref($info) eq 'HASH';
+
   my $h = {'versrel' => $info->{'versrel'}, 'bcnt' => $info->{'bcnt'}, 'time' => $now, 'srcmd5' => $info->{'srcmd5'}, 'rev' => $info->{'rev'}, 'reason' => $info->{'reason'}, 'duration' => $duration};
+
+  # Write to legacy repository path
   BSFileDB::fdb_add("$dst/history", $historylay, $h);
+
+  # Write to durable global path if context is available
+  if (defined($projid) && defined($packid)) {
+    my $tag = $bcntsynctag || $packid;
+    my $buildcounter_dir = $BSConfig::buildcounter_dir || "$BSConfig::bsdir/db/buildcounter";
+    my $global_history_dir = "$buildcounter_dir/$projid/$tag";
+    mkdir_p($global_history_dir);
+    BSFileDB::fdb_add("$global_history_dir/history", $historylay, $h);
+  }
 }
 
 
@@ -918,13 +935,27 @@ sub nextbcnt {
   my $gdst = $ctx->{'gdst'};
   my $relsyncmax = $ctx->{'relsyncmax'};
   my $dst = "$gdst/$packid";
-  if (-e "$dst/history") {
-    $h = BSFileDB::fdb_getmatch("$dst/history", $historylay, 'versrel', $pdata->{'versrel'}, 1);
+
+  my $projid = $ctx->{'project'};
+  my $tag = $pdata->{'bcntsynctag'} || ($info || {})->{'bcntsynctag'} || $packid;
+  my $buildcounter_dir = $BSConfig::buildcounter_dir || "$BSConfig::bsdir/db/buildcounter";
+  my $global_history_dir = defined($projid) ? "$buildcounter_dir/$projid/$tag" : undef;
+
+  if (defined($global_history_dir) && -e "$global_history_dir/history") {
+    $h = BSFileDB::fdb_getmatch("$global_history_dir/history", $historylay, 'versrel', $pdata->{'versrel'}, 1);
+  } elsif (-e "$dst/history") {
+    if (defined($global_history_dir)) {
+      # Migrate legacy history to global path on read
+      mkdir_p($global_history_dir);
+      BSUtil::cp("$dst/history", "$global_history_dir/history");
+      $h = BSFileDB::fdb_getmatch("$global_history_dir/history", $historylay, 'versrel', $pdata->{'versrel'}, 1);
+    } else {
+      $h = BSFileDB::fdb_getmatch("$dst/history", $historylay, 'versrel', $pdata->{'versrel'}, 1);
+    }
   }
   $h = {'bcnt' => 0} unless $h;
 
   # max with sync data
-  my $tag = $pdata->{'bcntsynctag'} || ($info || {})->{'bcntsynctag'} || $packid;
   if ($relsyncmax && $relsyncmax->{"$tag/$pdata->{'versrel'}"}) {
     if ($h->{'bcnt'} + 1 < $relsyncmax->{"$tag/$pdata->{'versrel'}"}) {
       $h->{'bcnt'} = $relsyncmax->{"$tag/$pdata->{'versrel'}"} - 1;

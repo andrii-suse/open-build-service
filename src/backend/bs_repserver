@@ -1231,9 +1231,31 @@ sub getbinarylist {
   return ({'binary' => \@res}, $BSXML::binarylist);
 }
 
+sub resolve_tag {
+  my ($projid, $packid) = @_;
+  my $tag = $packid;
+  my $projectsdir = "$BSConfig::bsdir/projects";
+  if (open(my $fh, '<', "$projectsdir/$projid.pkg/$packid.xml")) {
+    while (<$fh>) {
+      if (/<bcntsynctag>(.*?)<\/bcntsynctag>/) {
+        $tag = $1;
+        last;
+      }
+    }
+    close($fh);
+  }
+  return $tag;
+}
+
 sub getbuildhistory {
   my ($cgi, $projid, $repoid, $arch, $packid) = @_;
-  my @history = BSFileDB::fdb_getall_reverse("$reporoot/$projid/$repoid/$arch/$packid/history", $historylay, $cgi->{'limit'} || 100);
+  my $tag = resolve_tag($projid, $packid);
+  my $history_path = "$reporoot/$projid/$repoid/$arch/$packid/history";
+  my $buildcounter_dir = $BSConfig::buildcounter_dir || (defined($BSConfig::bsdir) ? "$BSConfig::bsdir/db/buildcounter" : undef);
+  if (defined($buildcounter_dir) && -e "$buildcounter_dir/$projid/$tag/history") {
+    $history_path = "$buildcounter_dir/$projid/$tag/history";
+  }
+  my @history = BSFileDB::fdb_getall_reverse($history_path, $historylay, $cgi->{'limit'} || 100);
   @history = reverse @history;
   return ({'entry' => \@history}, $BSXML::buildhist);
 }
@@ -1306,7 +1328,13 @@ sub getjobstatus {
   return ({}, $BSXML::jobstatus) unless $jobstatus;
 
   # find last successful build
-  my $history = BSFileDB::fdb_getlast("$reporoot/$projid/$repoid/$arch/$packid/history", $historylay);
+  my $tag = resolve_tag($projid, $packid);
+  my $history_path = "$reporoot/$projid/$repoid/$arch/$packid/history";
+  my $buildcounter_dir = $BSConfig::buildcounter_dir || (defined($BSConfig::bsdir) ? "$BSConfig::bsdir/db/buildcounter" : undef);
+  if (defined($buildcounter_dir) && -e "$buildcounter_dir/$projid/$tag/history") {
+    $history_path = "$buildcounter_dir/$projid/$tag/history";
+  }
+  my $history = BSFileDB::fdb_getlast($history_path, $historylay);
   my $lastduration;
   $lastduration = $history->{'duration'} if $history;
   $jobstatus->{'lastduration'} = $lastduration if $lastduration;
@@ -3098,7 +3126,14 @@ sub getresult {
         my $s = {'package' => $packid, 'code' => $code};
         $s->{'details'} = $ps->{'packerror'}->{$packid} if !$cgi->{'lastbuild'} && $ps->{'packerror'}->{$packid};
         if ($cgi->{'withversrel'} && -e "$reporoot/$prpa/:logfiles.success/$packid") {
-	  my $history = BSFileDB::fdb_getlast("$reporoot/$prpa/$packid/history", $historylay) || {};
+	  my ($projid) = split('/', $prpa);
+	  my $tag = resolve_tag($projid, $packid);
+	  my $history_path = "$reporoot/$prpa/$packid/history";
+	  my $buildcounter_dir = $BSConfig::buildcounter_dir || (defined($BSConfig::bsdir) ? "$BSConfig::bsdir/db/buildcounter" : undef);
+	  if (defined($buildcounter_dir) && -e "$buildcounter_dir/$projid/$tag/history") {
+	    $history_path = "$buildcounter_dir/$projid/$tag/history";
+	  }
+	  my $history = BSFileDB::fdb_getlast($history_path, $historylay) || {};
 	  $s->{'versrel'} = $history->{'versrel'} if $history->{'versrel'};
         }
         push @{$sl->{'status'}}, $s;

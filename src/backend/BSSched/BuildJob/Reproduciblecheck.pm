@@ -406,7 +406,7 @@ sub jobfinished {
   # write history file
   my $duration = 0;
   $duration = $js->{'endtime'} - $js->{'starttime'} if $js->{'endtime'} && $js->{'starttime'};
-  BSSched::BuildJob::addsucceededhist($dst, $info, $now, $duration);
+  BSSched::BuildJob::addsucceededhist($dst, $info, $now, $duration, $projid, $packid, $pdata->{'bcntsynctag'});
 
   # save logfile
   link("$jobdatadir/logfile", "$jobdatadir/logfile.dup");

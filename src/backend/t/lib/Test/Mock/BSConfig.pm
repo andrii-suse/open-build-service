@@ -24,6 +24,7 @@ $main::INC{'BSConfig.pm'} = 'BSConfig.pm';
 # this is the dummy config we use in the unit tests
 
 $BSConfig::bsdir = "$FindBin::Bin/data/shared";
+$BSConfig::buildcounter_dir = "$FindBin::Bin/tmp/db/buildcounter";
 $BSConfig::srcserver = 'srcserver';
 $BSConfig::reposerver = 'reposerver';
 $BSConfig::repodownload = 'http://download.opensuse.org/repositories';
